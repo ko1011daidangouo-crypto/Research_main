@@ -176,6 +176,35 @@
         input[type=range] {
             width: 80%;
             margin: 20px 0;
+            position: relative;
+        }
+
+        .vas-slider-container {
+            position: relative;
+            width: 80%;
+            margin: 20px auto;
+        }
+
+        .vas-reference-line {
+            position: absolute;
+            top: 50%;
+            width: 3px;
+            height: 30px;
+            background: #ff0000;
+            transform: translateY(-50%);
+            pointer-events: none;
+            z-index: 10;
+            border-radius: 2px;
+        }
+
+        .vas-reference-label {
+            position: absolute;
+            top: -25px;
+            transform: translateX(-50%);
+            color: #ff0000;
+            font-size: 0.85em;
+            font-weight: bold;
+            white-space: nowrap;
         }
 
         .vas-labels {
@@ -232,6 +261,12 @@
             <div id="status-bar"
                 style="text-align:center; padding:10px; background:#e1f5fe; color:#0277bd; font-size:0.9em;">準備中...
             </div>
+            <div id="skip-button-container" style="text-align:center; padding:10px; display:none;">
+                <button id="skip-button" onclick="skipCurrentPhase()" 
+                    style="background:#ff6b6b; font-size:0.9em; padding:8px 16px;">
+                    ⏭️ スキップ (デバッグモード)
+                </button>
+            </div>
             <div id="timeline-container" class="timeline-container"></div>
         </div>
 
@@ -241,13 +276,18 @@
                 <h2>現在の気分について</h2>
                 <p>今のストレス度をスライダーで評価してください。</p>
                 <div style="font-size:2em; font-weight:bold; color:var(--twitter-blue);" id="vas-value">50</div>
-                <input type="range" id="vas-slider" min="0" max="100" value="50"
-                    oninput="document.getElementById('vas-value').innerText=this.value">
+                <div class="vas-slider-container">
+                    <div id="vas-reference-line" class="vas-reference-line" style="display:none;">
+                        <div class="vas-reference-label" id="vas-reference-label"></div>
+                    </div>
+                    <input type="range" id="vas-slider" min="0" max="100" value="50"
+                        oninput="updateVasValue(this.value)">
+                </div>
                 <div class="vas-labels">
                     <span>全く感じない (0)</span>
                     <span>非常に強く感じる (100)</span>
                 </div>
-                <button onclick="submitVas()">送信して終了</button>
+                <button onclick="submitVas()">送信して次へ</button>
             </div>
         </div>
 
@@ -266,6 +306,8 @@
         let userId = '';
         let currentCondition = '';
         let timerInterval;
+        let currentVasPhase = '';
+        let currentVasCallback = null;
 
         // Configuration (ms)
         const DURATION_WARMUP = 2 * 60 * 1000;
@@ -273,9 +315,13 @@
         const DURATION_PHASE_2 = 5 * 60 * 1000;
         const DURATION_PHASE_3 = 5 * 60 * 1000;
 
-        // Debug Mode (Set true to speed up time for testing)
-        const DEBUG = false;
+        // Debug Mode (URLパラメータ ?debug=1 で有効化、または true に設定)
+        const urlParams = new URLSearchParams(window.location.search);
+        const DEBUG = urlParams.get('debug') === '1' || false;
         const TIME_SCALE = DEBUG ? 0.05 : 1;
+        
+        // スキップ用の変数
+        let currentPhaseCallback = null;
 
         // Navigation
         function showScreen(id) {
@@ -322,14 +368,24 @@
 
         // 3. Timeline Flow
         function startTimelineFlow() {
-            showScreen('screen-timeline');
-
-            // Sequence: Warmup -> Main 0-5 -> Main 5-10 -> Main 10-15 -> Finish
-            runPhase('warmup', 'ウォームアップ (2分)', DURATION_WARMUP * TIME_SCALE, () => {
-                runPhase('0-5', '本番 1/3 (5分)', DURATION_PHASE_1 * TIME_SCALE, () => {
-                    runPhase('5-10', '本番 2/3 (5分)', DURATION_PHASE_2 * TIME_SCALE, () => {
-                        runPhase('10-15', '本番 3/3 (5分)', DURATION_PHASE_3 * TIME_SCALE, () => {
-                            finishExperiment();
+            // 事前アンケートから開始
+            showVasModal('pre', () => {
+                showScreen('screen-timeline');
+                // Sequence: Warmup (VAS) -> Main 0-5 (VAS) -> Main 5-10 (VAS) -> Main 10-15 (VAS) -> Finish
+                runPhase('warmup', 'ウォームアップ (2分)', DURATION_WARMUP * TIME_SCALE, () => {
+                    showVasModal('warmup', () => {
+                        runPhase('0-5', '本番 1/3 (5分)', DURATION_PHASE_1 * TIME_SCALE, () => {
+                            showVasModal('0-5', () => {
+                                runPhase('5-10', '本番 2/3 (5分)', DURATION_PHASE_2 * TIME_SCALE, () => {
+                                    showVasModal('5-10', () => {
+                                        runPhase('10-15', '本番 3/3 (5分)', DURATION_PHASE_3 * TIME_SCALE, () => {
+                                            showVasModal('10-15', () => {
+                                                finishExperiment();
+                                            });
+                                        });
+                                    });
+                                });
+                            });
                         });
                     });
                 });
@@ -339,6 +395,14 @@
         async function runPhase(phaseId, label, duration, callback) {
             document.getElementById('status-bar').innerText = label;
             document.getElementById('timeline-container').innerHTML = ''; // Clear previous
+            
+            // デバッグモードの時にスキップボタンを表示
+            if (DEBUG) {
+                document.getElementById('skip-button-container').style.display = 'block';
+                currentPhaseCallback = callback;
+            } else {
+                document.getElementById('skip-button-container').style.display = 'none';
+            }
 
             // Fetch Data
             try {
@@ -364,6 +428,16 @@
                     callback();
                 }
             }, 1000);
+        }
+        
+        // スキップ機能
+        function skipCurrentPhase() {
+            if (DEBUG && currentPhaseCallback) {
+                clearInterval(timerInterval);
+                updateTimer(0);
+                currentPhaseCallback();
+                currentPhaseCallback = null;
+            }
         }
 
         function updateTimer(ms) {
@@ -392,27 +466,126 @@
             });
         }
 
-        function finishExperiment() {
+        // VASモーダルを表示（各フェーズ後）
+        async function showVasModal(phase, callback) {
+            // VASスライダーをリセット
+            document.getElementById('vas-slider').value = 50;
+            document.getElementById('vas-value').innerText = '50';
+            
+            // 現在のフェーズを保存
+            currentVasPhase = phase;
+            currentVasCallback = callback;
+            
+            // 前回のVASスコアを取得して表示
+            await loadPreviousVasScore(phase);
+            
+            // モーダルを表示
             document.getElementById('modal-vas').style.display = 'flex';
+        }
+
+        // 前回のVASスコアを取得して赤線で表示
+        async function loadPreviousVasScore(currentPhase) {
+            try {
+                const res = await fetch(`/api/vas/previous?user_id=${userId}&condition=${currentCondition}&current_phase=${currentPhase}`);
+                const data = await res.json();
+                
+                const referenceLine = document.getElementById('vas-reference-line');
+                const referenceLabel = document.getElementById('vas-reference-label');
+                
+                if (data.previous_score !== null && data.previous_score !== undefined) {
+                    const previousScore = parseInt(data.previous_score);
+                    
+                    // モーダルが表示された後に位置を計算
+                    setTimeout(() => {
+                        const slider = document.getElementById('vas-slider');
+                        const container = document.querySelector('.vas-slider-container');
+                        
+                        if (slider && container) {
+                            // スライダーの実際の幅を取得
+                            const sliderRect = slider.getBoundingClientRect();
+                            const containerRect = container.getBoundingClientRect();
+                            
+                            // スライダーの左端からの相対位置を計算
+                            const sliderLeft = sliderRect.left - containerRect.left;
+                            const sliderWidth = sliderRect.width;
+                            
+                            // スコア（0-100）をピクセル位置に変換
+                            const position = sliderLeft + (sliderWidth * previousScore / 100);
+                            
+                            // 赤線の位置を設定
+                            referenceLine.style.left = `${position}px`;
+                            referenceLine.style.display = 'block';
+                            referenceLabel.innerText = `前回: ${previousScore}`;
+                            referenceLabel.style.left = `${position}px`;
+                        }
+                    }, 200);
+                } else {
+                    referenceLine.style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Failed to load previous VAS score:', e);
+                document.getElementById('vas-reference-line').style.display = 'none';
+            }
+        }
+
+        // VAS値の更新
+        function updateVasValue(value) {
+            document.getElementById('vas-value').innerText = value;
         }
 
         async function submitVas() {
             const score = document.getElementById('vas-slider').value;
+            const phase = currentVasPhase;
+            
+            console.log(`[Frontend] Submitting VAS: user_id=${userId}, condition=${currentCondition}, phase=${phase}, score=${score}`);
+            
             try {
-                await fetch('/api/complete', {
+                // VASスコアを記録
+                const response = await fetch('/api/vas', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         user_id: userId,
                         condition: currentCondition,
-                        vas_score: score
+                        phase: phase,
+                        vas_score: parseInt(score)
                     })
                 });
+                
+                const responseData = await response.json();
+                console.log(`[Frontend] API Response:`, responseData);
+                
+                if (!response.ok) {
+                    throw new Error(responseData.error || `HTTP ${response.status}`);
+                }
+                
+                // モーダルを閉じる
                 document.getElementById('modal-vas').style.display = 'none';
-                showScreen('screen-complete');
+                
+                // コールバックを実行（次のフェーズへ進む、または終了）
+                if (currentVasCallback) {
+                    currentVasCallback();
+                    currentVasCallback = null;
+                }
             } catch (e) {
-                alert('送信エラー');
+                console.error('[Frontend] VAS submission error:', e);
+                alert('送信エラー: ' + e.message + '\n\nコンソールを確認してください。');
             }
+        }
+
+        function finishExperiment() {
+            // 実験完了を記録
+            fetch('/api/complete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    condition: currentCondition
+                })
+            }).catch(e => console.error('Complete error:', e));
+            
+            // 完了画面を表示
+            showScreen('screen-complete');
         }
     </script>
 

@@ -10,23 +10,42 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 
 # .envファイルを読み込む（ローカル開発用）
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-env_path = os.path.join(BASE_DIR, '.env')
+# Vercel環境ではファイルシステム操作が失敗する可能性があるため、try-exceptで保護
+try:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env_path = os.path.join(BASE_DIR, '.env')
+    
+    # === 環境の診断情報を出力 ===
+    print("=" * 60)
+    print("[環境診断] アプリケーション起動")
+    print(f"[環境診断] BASE_DIR: {BASE_DIR}")
+    print(f"[環境診断] .env path: {env_path}")
+    
+    if os.path.exists(env_path):
+        print("[環境診断] .envファイルを読み込みます")
+        load_dotenv(env_path)
+    else:
+        print("[環境診断] .envファイルが存在しません（Vercel環境の場合は正常）")
+except Exception as e:
+    print(f"[環境診断] Warning: Error during BASE_DIR initialization: {e}")
+    # フォールバック: カレントディレクトリを使用
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    env_path = None
 
-# === 環境の診断情報を出力 ===
-print("=" * 60)
-print("[環境診断] アプリケーション起動")
-print(f"[環境診断] BASE_DIR: {BASE_DIR}")
-print(f"[環境診断] .env path: {env_path}")
-print(f"[環境診断] .env exists: {os.path.exists(env_path)}")
+# Flaskアプリの初期化（テンプレートフォルダが見つからなくても動作するように）
+try:
+    template_folder_path = os.path.join(BASE_DIR, 'templates')
+    if os.path.exists(template_folder_path):
+        app = Flask(__name__, template_folder=template_folder_path)
+        print(f"[環境診断] Flask app initialized with template_folder: {template_folder_path}")
+    else:
+        app = Flask(__name__)
+        print(f"[環境診断] Template folder not found, using default")
+except Exception as e:
+    print(f"[環境診断] Warning: Error initializing Flask app: {e}")
+    # フォールバック: デフォルト設定でFlaskアプリを作成
+    app = Flask(__name__)
 
-if os.path.exists(env_path):
-    print("[環境診断] .envファイルを読み込みます")
-    load_dotenv(env_path)
-else:
-    print("[環境診断] .envファイルが存在しません（Vercel環境の場合は正常）")
-
-app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
 CORS(app)
 
 # --- Supabase Setup ---
@@ -125,18 +144,34 @@ class TimelineManager:
         self.load_all_data()
 
     def load_csv(self, filename, text_col='text'):
-        path = os.path.join(BASE_DIR, filename) # ルート直下にあると想定
-        if not os.path.exists(path):
-            # Vercel環境などでは data/ フォルダにある場合も考慮
-            path_in_data = os.path.join(BASE_DIR, 'data', filename)
-            if os.path.exists(path_in_data):
-                path = path_in_data
-            else:
-                print(f"Warning: File not found: {filename}")
-                return []
+        # BASE_DIRが定義されていることを確認
+        try:
+            base_dir = BASE_DIR
+        except NameError:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        
+        # 複数のパスを試す（Vercel環境対応）
+        possible_paths = [
+            os.path.join(base_dir, 'data', filename),  # data/フォルダ（最優先）
+            os.path.join(base_dir, filename),  # ルート直下
+            filename,  # カレントディレクトリ
+        ]
+        
+        path = None
+        for p in possible_paths:
+            try:
+                if os.path.exists(p):
+                    path = p
+                    break
+            except Exception:
+                continue
+        
+        if not path:
+            print(f"Warning: File not found: {filename} (searched: {possible_paths})")
+            return []
         
         try:
-            df = pd.read_csv(path)
+            df = pd.read_csv(path, low_memory=False)
             if text_col not in df.columns and 'Sentence' in df.columns:
                 df.rename(columns={'Sentence': text_col}, inplace=True)
             
@@ -152,6 +187,8 @@ class TimelineManager:
             return []
         except Exception as e:
             print(f"Error loading {filename}: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def load_all_data(self):
@@ -187,8 +224,28 @@ class TimelineManager:
         
         return []
 
-# インスタンス化
-manager = TimelineManager()
+# インスタンス化（遅延初期化、エラーが発生してもアプリがクラッシュしないように）
+manager = None
+
+def get_manager():
+    """TimelineManagerのシングルトンインスタンスを取得"""
+    global manager
+    if manager is None:
+        try:
+            manager = TimelineManager()
+        except Exception as e:
+            print(f"Error initializing TimelineManager: {e}")
+            import traceback
+            traceback.print_exc()
+            # エラーが発生しても空のマネージャーを返す
+            manager = TimelineManager.__new__(TimelineManager)
+            manager.data_store = {
+                'warmup': [],
+                'weak': {'0-5': [], '5-10': [], '10-15': []},
+                'mid': {'0-5': [], '5-10': [], '10-15': []},
+                'strong': {'0-5': [], '5-10': [], '10-15': []}
+            }
+    return manager
 
 # --- Routes ---
 
@@ -279,7 +336,7 @@ def get_timeline():
     if not phase:
         return jsonify({'error': 'Phase required'}), 400
 
-    posts = manager.get_posts(condition, phase)
+    posts = get_manager().get_posts(condition, phase)
     
     # フロントエンドの期待する形式に整形
     timeline = []

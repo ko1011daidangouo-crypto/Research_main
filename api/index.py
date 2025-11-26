@@ -12,8 +12,19 @@ from dotenv import load_dotenv
 # .envファイルを読み込む（ローカル開発用）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(BASE_DIR, '.env')
+
+# === 環境の診断情報を出力 ===
+print("=" * 60)
+print("[環境診断] アプリケーション起動")
+print(f"[環境診断] BASE_DIR: {BASE_DIR}")
+print(f"[環境診断] .env path: {env_path}")
+print(f"[環境診断] .env exists: {os.path.exists(env_path)}")
+
 if os.path.exists(env_path):
+    print("[環境診断] .envファイルを読み込みます")
     load_dotenv(env_path)
+else:
+    print("[環境診断] .envファイルが存在しません（Vercel環境の場合は正常）")
 
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
 CORS(app)
@@ -21,16 +32,50 @@ CORS(app)
 # --- Supabase Setup ---
 supabase: Client = None
 try:
-    supabase_url = os.getenv('SUPABASE_URL')
-    supabase_key = os.getenv('SUPABASE_KEY')
+    # === 環境変数の診断情報を出力（セキュリティのため値は部分的にマスク）===
+    print("-" * 60)
+    print("[Supabase診断] 環境変数の読み取り")
+    
+    # os.environ.get()を使用（Vercel環境でより確実）
+    supabase_url = os.environ.get('SUPABASE_URL')
+    supabase_key = os.environ.get('SUPABASE_KEY')
+    
+    # 診断情報を出力
+    print(f"[Supabase診断] SUPABASE_URL 存在: {supabase_url is not None}")
+    if supabase_url:
+        print(f"[Supabase診断] SUPABASE_URL 長さ: {len(supabase_url)}")
+        print(f"[Supabase診断] SUPABASE_URL 先頭: {supabase_url[:30]}..." if len(supabase_url) > 30 else f"[Supabase診断] SUPABASE_URL: {supabase_url}")
+    else:
+        print("[Supabase診断] ⚠️ SUPABASE_URL が None です")
+    
+    print(f"[Supabase診断] SUPABASE_KEY 存在: {supabase_key is not None}")
+    if supabase_key:
+        print(f"[Supabase診断] SUPABASE_KEY 長さ: {len(supabase_key)}")
+        print(f"[Supabase診断] SUPABASE_KEY 先頭: {supabase_key[:20]}..." if len(supabase_key) > 20 else "[Supabase診断] SUPABASE_KEY: (短すぎる)")
+    else:
+        print("[Supabase診断] ⚠️ SUPABASE_KEY が None です")
+    
+    # 全環境変数のキー一覧を出力（値は出力しない）
+    all_env_keys = list(os.environ.keys())
+    supabase_related = [k for k in all_env_keys if 'SUPABASE' in k.upper()]
+    print(f"[Supabase診断] Supabase関連の環境変数キー: {supabase_related}")
+    print(f"[Supabase診断] 全環境変数の数: {len(all_env_keys)}")
     
     if supabase_url and supabase_key:
+        print("[Supabase診断] ✓ 環境変数が設定されています。クライアント作成中...")
         supabase = create_client(supabase_url, supabase_key)
-        print("Supabase接続に成功しました。")
+        print("[Supabase診断] ✓ Supabase接続に成功しました。")
     else:
-        print("警告: Supabase環境変数が設定されていません。")
+        print("[Supabase診断] ✗ 警告: Supabase環境変数が設定されていません。")
+        print("[Supabase診断] データベース機能は利用できません。")
+    
+    print("=" * 60)
+    
 except Exception as e:
-    print(f"Supabase接続エラー: {e}")
+    print(f"[Supabase診断] ✗ Supabase接続エラー: {e}")
+    import traceback
+    traceback.print_exc()
+    print("=" * 60)
 
 # --- Helper Function ---
 def clean_text_line(text):
@@ -530,5 +575,5 @@ def complete():
 
 # Vercel用
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5001))
+    port = int(os.environ.get('PORT', 5001))
     app.run(debug=True, port=port)

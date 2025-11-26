@@ -159,44 +159,6 @@ class TimelineManager:
         
         return []
 
-# インスタンス化
-manager = TimelineManager()
-
-# --- Routes ---
-
-@app.route('/api/debug/table-structure', methods=['GET'])
-def debug_table_structure():
-    """テーブル構造を確認するためのデバッグエンドポイント"""
-    if not supabase:
-        return jsonify({'error': 'Supabase not configured'}), 500
-    
-    try:
-        # 1件のレコードを取得してカラム名を確認
-        result = supabase.table('experiment_logs')\
-            .select('*')\
-            .limit(1)\
-            .execute()
-        
-        if result.data and len(result.data) > 0:
-            columns = list(result.data[0].keys())
-            return jsonify({
-                'columns': columns,
-                'sample_record': result.data[0]
-            })
-        else:
-            return jsonify({
-                'columns': [],
-                'message': 'No records found in table'
-            })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json

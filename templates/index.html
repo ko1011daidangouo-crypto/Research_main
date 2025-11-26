@@ -569,7 +569,7 @@
                 }
             } catch (e) {
                 console.error('[Frontend] VAS submission error:', e);
-                alert('送信エラー: ' + e.message + '\n\nコンソールを確認してください。');
+                alert('送信エラー: ' + e.message + '\n\n詳細: ' + (responseData?.error || '不明なエラー'));
             }
         }
 

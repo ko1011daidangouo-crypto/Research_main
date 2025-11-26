@@ -484,16 +484,46 @@ def complete():
         
     if supabase:
         try:
-            record = {
-                'participant_name': user_id,
-                'filter_condition': condition,
-                'status': 'completed',
-                'timestamp': datetime.now().isoformat()
-            }
-            supabase.table('experiment_logs').insert(record).execute()
-            return jsonify({'status': 'ok'})
+            # 既存のレコードを検索（同じユーザー・条件で最新のもの）
+            existing = supabase.table('experiment_logs')\
+                .select('id,status')\
+                .eq('participant_name', user_id)\
+                .eq('filter_condition', condition)\
+                .order('id', desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if existing.data and len(existing.data) > 0:
+                latest_record = existing.data[0]
+                record_id = latest_record['id']
+                record_status = latest_record.get('status')
+                
+                # 既存のレコードが未完了の場合は更新
+                if record_status != 'completed':
+                    print(f"[Complete API] Updating record {record_id} to completed")
+                    supabase.table('experiment_logs')\
+                        .update({'status': 'completed'})\
+                        .eq('id', record_id)\
+                        .execute()
+                    return jsonify({'status': 'ok', 'message': f'Updated record {record_id}'})
+                else:
+                    print(f"[Complete API] Record {record_id} is already completed")
+                    return jsonify({'status': 'ok', 'message': 'Already completed'})
+            else:
+                # レコードが存在しない場合は新規作成（通常は発生しないはず）
+                print(f"[Complete API] Warning: No existing record found, creating new one")
+                record = {
+                    'participant_name': user_id,
+                    'filter_condition': condition,
+                    'status': 'completed',
+                    'timestamp': datetime.now().isoformat()
+                }
+                supabase.table('experiment_logs').insert(record).execute()
+                return jsonify({'status': 'ok', 'message': 'Created new record'})
         except Exception as e:
-            print(f"Supabase insert error: {e}")
+            print(f"Supabase error: {e}")
+            import traceback
+            traceback.print_exc()
             return jsonify({'error': str(e)}), 500
     
     return jsonify({'status': 'ok'})

@@ -36,9 +36,24 @@ try:
     print("-" * 60)
     print("[Supabase診断] 環境変数の読み取り")
     
-    # os.environ.get()を使用（Vercel環境でより確実）
-    supabase_url = os.environ.get('SUPABASE_URL')
-    supabase_key = os.environ.get('SUPABASE_KEY')
+    # Vercel環境での環境変数読み込みを改善
+    # 複数の方法を試して確実に読み込む
+    supabase_url = (
+        os.environ.get('SUPABASE_URL') or 
+        os.environ.get('supabase_url') or
+        os.getenv('SUPABASE_URL') or
+        os.getenv('supabase_url')
+    )
+    supabase_key = (
+        os.environ.get('SUPABASE_KEY') or 
+        os.environ.get('supabase_key') or
+        os.getenv('SUPABASE_KEY') or
+        os.getenv('supabase_key')
+    )
+    
+    # Vercel環境の確認
+    is_vercel = os.environ.get('VERCEL') == '1' or 'VERCEL' in os.environ
+    print(f"[Supabase診断] Vercel環境: {is_vercel}")
     
     # 診断情報を出力
     print(f"[Supabase診断] SUPABASE_URL 存在: {supabase_url is not None}")
@@ -57,9 +72,16 @@ try:
     
     # 全環境変数のキー一覧を出力（値は出力しない）
     all_env_keys = list(os.environ.keys())
-    supabase_related = [k for k in all_env_keys if 'SUPABASE' in k.upper()]
+    supabase_related = [k for k in all_env_keys if 'SUPABASE' in k.upper() or 'supabase' in k.lower()]
     print(f"[Supabase診断] Supabase関連の環境変数キー: {supabase_related}")
     print(f"[Supabase診断] 全環境変数の数: {len(all_env_keys)}")
+    
+    # 環境変数のキーをすべて表示（デバッグ用、最初の50個のみ）
+    if not supabase_url or not supabase_key:
+        print("[Supabase診断] 環境変数キーの一部（デバッグ用）:")
+        for key in sorted(all_env_keys)[:50]:
+            if 'SUPABASE' in key.upper() or 'VERCEL' in key.upper():
+                print(f"  - {key}")
     
     if supabase_url and supabase_key:
         print("[Supabase診断] ✓ 環境変数が設定されています。クライアント作成中...")
@@ -68,6 +90,12 @@ try:
     else:
         print("[Supabase診断] ✗ 警告: Supabase環境変数が設定されていません。")
         print("[Supabase診断] データベース機能は利用できません。")
+        if is_vercel:
+            print("[Supabase診断] ⚠️ Vercel環境です。環境変数が正しく設定されているか確認してください:")
+            print("[Supabase診断]   1. Vercelダッシュボード > Settings > Environment Variables")
+            print("[Supabase診断]   2. SUPABASE_URL と SUPABASE_KEY が設定されているか確認")
+            print("[Supabase診断]   3. Production, Preview, Development すべてに設定されているか確認")
+            print("[Supabase診断]   4. 環境変数を追加/変更した後は再デプロイが必要です")
     
     print("=" * 60)
     
@@ -163,6 +191,24 @@ class TimelineManager:
 manager = TimelineManager()
 
 # --- Routes ---
+
+@app.route('/api/debug/env', methods=['GET'])
+def debug_env():
+    """環境変数の状態を確認するためのデバッグエンドポイント"""
+    all_env_keys = list(os.environ.keys())
+    supabase_related = [k for k in all_env_keys if 'SUPABASE' in k.upper()]
+    
+    return jsonify({
+        'supabase_configured': supabase is not None,
+        'supabase_url_exists': os.environ.get('SUPABASE_URL') is not None,
+        'supabase_key_exists': os.environ.get('SUPABASE_KEY') is not None,
+        'supabase_url_length': len(os.environ.get('SUPABASE_URL', '')) if os.environ.get('SUPABASE_URL') else 0,
+        'supabase_key_length': len(os.environ.get('SUPABASE_KEY', '')) if os.environ.get('SUPABASE_KEY') else 0,
+        'supabase_related_keys': supabase_related,
+        'total_env_vars': len(all_env_keys),
+        'vercel_env': os.environ.get('VERCEL', 'false'),
+        'environment': os.environ.get('ENV', 'unknown')
+    })
 
 @app.route('/api/debug/table-structure', methods=['GET'])
 def debug_table_structure():
@@ -341,7 +387,16 @@ def save_vas():
         
     if not supabase:
         print("[VAS API] Supabase not configured")
-        return jsonify({'error': 'Database not configured'}), 500
+        # より詳細なエラー情報を返す
+        is_vercel = os.environ.get('VERCEL') == '1' or 'VERCEL' in os.environ
+        error_msg = {
+            'error': 'Database not configured',
+            'supabase_url_exists': os.environ.get('SUPABASE_URL') is not None,
+            'supabase_key_exists': os.environ.get('SUPABASE_KEY') is not None,
+            'is_vercel': is_vercel,
+            'hint': 'Please check environment variables in Vercel dashboard' if is_vercel else 'Please check .env file'
+        }
+        return jsonify(error_msg), 500
         
     try:
         # フェーズをカラム名にマッピング（共通のヘルパー関数を使用）

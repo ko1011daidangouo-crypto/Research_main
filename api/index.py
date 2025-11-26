@@ -422,13 +422,23 @@ def get_phase_to_column_mapping():
 @app.route('/api/vas', methods=['POST'])
 def save_vas():
     """各フェーズのVASスコアを記録"""
+    # リクエストデータの取得と検証
+    if not request.is_json:
+        print("[VAS API] Error: Request is not JSON")
+        return jsonify({'error': 'Request must be JSON'}), 400
+        
     data = request.json
+    if not data:
+        print("[VAS API] Error: Request data is empty")
+        return jsonify({'error': 'Request data is empty'}), 400
+        
     user_id = data.get('user_id')
     condition = data.get('condition')
     phase = data.get('phase')  # 'pre', 'warmup', '0-5', '5-10', '10-15'
     vas_score = data.get('vas_score')
     
     print(f"[VAS API] Received request: user_id={user_id}, condition={condition}, phase={phase}, vas_score={vas_score}")
+    print(f"[VAS API] Supabase configured: {supabase is not None}")
     
     if not user_id or condition not in ['weak', 'mid', 'strong']:
         print(f"[VAS API] Invalid data: user_id={user_id}, condition={condition}")
@@ -492,15 +502,25 @@ def save_vas():
         
         # 既存のレコードを検索（同じユーザー・条件で最新のもの）
         print(f"[VAS API] Searching for existing record: user_id={user_id}, condition={condition}")
-        existing = supabase.table('experiment_logs')\
-            .select('id,status')\
-            .eq('participant_name', user_id)\
-            .eq('filter_condition', condition)\
-            .order('id', desc=True)\
-            .limit(1)\
-            .execute()
-        
-        print(f"[VAS API] Existing records found: {len(existing.data) if existing.data else 0}")
+        try:
+            existing = supabase.table('experiment_logs')\
+                .select('id,status')\
+                .eq('participant_name', user_id)\
+                .eq('filter_condition', condition)\
+                .order('id', desc=True)\
+                .limit(1)\
+                .execute()
+            
+            print(f"[VAS API] Existing records found: {len(existing.data) if existing.data else 0}")
+        except Exception as query_error:
+            print(f"[VAS API] ERROR in querying existing records: {type(query_error).__name__}: {query_error}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'error': f'Database query error: {str(query_error)}',
+                'type': type(query_error).__name__,
+                'operation': 'query_existing_records'
+            }), 500
         
         # 最新のレコードが存在し、未完了（statusがNULLまたは'completed'でない）場合は更新
         if existing.data and len(existing.data) > 0:
@@ -520,20 +540,35 @@ def save_vas():
                     update_data['status'] = 'completed'
                 
                 print(f"[VAS API] Updating record {record_id} with data: {update_data}")
-                result = supabase.table('experiment_logs')\
-                    .update(update_data)\
-                    .eq('id', record_id)\
-                    .execute()
-                
-                print(f"[VAS API] Update result: {result.data if result.data else 'No data returned'}")
-                print(f"[VAS API] Successfully updated: {user_id}, {condition}, {phase} ({column_name}) = {vas_score}")
+                try:
+                    result = supabase.table('experiment_logs')\
+                        .update(update_data)\
+                        .eq('id', record_id)\
+                        .execute()
+                    
+                    print(f"[VAS API] Update result: {result.data if result.data else 'No data returned'}")
+                    print(f"[VAS API] Successfully updated: {user_id}, {condition}, {phase} ({column_name}) = {vas_score}")
+                except Exception as update_error:
+                    print(f"[VAS API] ERROR in updating record: {type(update_error).__name__}: {update_error}")
+                    import traceback
+                    traceback.print_exc()
+                    return jsonify({
+                        'error': f'Database update error: {str(update_error)}',
+                        'type': type(update_error).__name__,
+                        'operation': 'update_record',
+                        'record_id': record_id,
+                        'update_data': update_data
+                    }), 500
                 
                 # 更新後のレコードを確認
-                verify = supabase.table('experiment_logs')\
-                    .select(column_name)\
-                    .eq('id', record_id)\
-                    .execute()
-                print(f"[VAS API] Verification query result: {verify.data if verify.data else 'No data'}")
+                try:
+                    verify = supabase.table('experiment_logs')\
+                        .select(column_name)\
+                        .eq('id', record_id)\
+                        .execute()
+                    print(f"[VAS API] Verification query result: {verify.data if verify.data else 'No data'}")
+                except Exception as verify_error:
+                    print(f"[VAS API] Warning: Verification query failed: {verify_error}")
                 
                 return jsonify({'status': 'ok', 'message': f'Updated record {record_id}', 'column': column_name, 'value': int(vas_score)})
             else:
@@ -546,9 +581,20 @@ def save_vas():
                         'status': 'in_progress'
                     }
                     print(f"[VAS API] Creating new record (completed exists): {record}")
-                    result = supabase.table('experiment_logs').insert(record).execute()
-                    print(f"[VAS API] Insert result: {result.data if result.data else 'No data returned'}")
-                    return jsonify({'status': 'ok', 'message': 'Created new record', 'column': column_name, 'value': int(vas_score)})
+                    try:
+                        result = supabase.table('experiment_logs').insert(record).execute()
+                        print(f"[VAS API] Insert result: {result.data if result.data else 'No data returned'}")
+                        return jsonify({'status': 'ok', 'message': 'Created new record', 'column': column_name, 'value': int(vas_score)})
+                    except Exception as insert_error:
+                        print(f"[VAS API] ERROR in inserting record: {type(insert_error).__name__}: {insert_error}")
+                        import traceback
+                        traceback.print_exc()
+                        return jsonify({
+                            'error': f'Database insert error: {str(insert_error)}',
+                            'type': type(insert_error).__name__,
+                            'operation': 'insert_record',
+                            'record': record
+                        }), 500
                 else:
                     print(f"[VAS API] Error: Previous experiment completed, but phase is not 'pre'")
                     return jsonify({'error': 'Previous experiment is completed. Please start with pre phase.'}), 400
@@ -562,18 +608,45 @@ def save_vas():
                     'status': 'in_progress'
                 }
                 print(f"[VAS API] Creating new record (no existing): {record}")
-                result = supabase.table('experiment_logs').insert(record).execute()
-                print(f"[VAS API] Insert result: {result.data if result.data else 'No data returned'}")
-                return jsonify({'status': 'ok', 'message': 'Created new record', 'column': column_name, 'value': int(vas_score)})
+                try:
+                    result = supabase.table('experiment_logs').insert(record).execute()
+                    print(f"[VAS API] Insert result: {result.data if result.data else 'No data returned'}")
+                    return jsonify({'status': 'ok', 'message': 'Created new record', 'column': column_name, 'value': int(vas_score)})
+                except Exception as insert_error:
+                    print(f"[VAS API] ERROR in inserting record: {type(insert_error).__name__}: {insert_error}")
+                    import traceback
+                    traceback.print_exc()
+                    return jsonify({
+                        'error': f'Database insert error: {str(insert_error)}',
+                        'type': type(insert_error).__name__,
+                        'operation': 'insert_record',
+                        'record': record
+                    }), 500
             else:
                 print(f"[VAS API] Error: No existing record found, but phase is not 'pre'")
                 return jsonify({'error': 'No existing record found. Please start with pre phase.'}), 400
             
     except Exception as e:
-        print(f"[VAS API] Exception occurred: {e}")
+        error_type = type(e).__name__
+        error_message = str(e)
+        print(f"[VAS API] EXCEPTION OCCURRED: {error_type}: {error_message}")
         import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e), 'type': type(e).__name__}), 500
+        traceback_str = traceback.format_exc()
+        print(f"[VAS API] Traceback:\n{traceback_str}")
+        
+        # エラー情報を詳細に返す
+        error_response = {
+            'error': error_message,
+            'type': error_type,
+            'message': f'An error occurred while saving VAS score: {error_message}'
+        }
+        
+        # Vercel環境の場合は追加情報を返す
+        if os.environ.get('VERCEL') == '1':
+            error_response['environment'] = 'vercel'
+            error_response['supabase_configured'] = supabase is not None
+        
+        return jsonify(error_response), 500
 
 @app.route('/api/vas/previous', methods=['GET'])
 def get_previous_vas():
